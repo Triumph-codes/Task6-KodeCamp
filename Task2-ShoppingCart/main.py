@@ -1,16 +1,17 @@
 # main.py
 
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 import json
 import os
+import time
 from colorama import Fore, Style, init
 
 # Import authentication and user models
 from auth import (
-    get_authenticated_user, 
+    get_authenticated_user,
     get_current_admin,
     hash_password,
     UserInDB,
@@ -24,6 +25,8 @@ init(autoreset=True)
 # --- Constants ---
 PRODUCTS_FILE = "products.json"
 CART_FILE = "cart.json"
+LOGIN_LIMIT = 5
+LOGIN_WINDOW_SECONDS = 60
 
 # --- Pydantic Models for Shopping API ---
 class ProductBase(BaseModel):
@@ -49,6 +52,7 @@ class Cart(BaseModel):
 # --- Database Mock-ups ---
 products_db: Dict[str, Product] = {}
 carts_db: Dict[str, Cart] = {}
+request_counts: Dict[str, List[float]] = {}
 
 # --- Utility Functions for Data Persistence ---
 def load_data() -> None:
@@ -130,8 +134,33 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# --- Rate Limiting Dependency ---
+async def rate_limit_login(request: Request):
+    """
+    Dependency to rate limit login attempts per IP address.
+    """
+    client_ip = request.client.host
+    current_time = time.time()
+    
+    # Clean up old timestamps
+    if client_ip in request_counts:
+        request_counts[client_ip] = [t for t in request_counts[client_ip] if current_time - t < LOGIN_WINDOW_SECONDS]
+    else:
+        request_counts[client_ip] = []
+        
+    # Check if the limit is exceeded
+    if len(request_counts[client_ip]) >= LOGIN_LIMIT:
+        print(f"{Fore.RED}WARNING: Rate limit exceeded for IP {client_ip}.{Style.RESET_ALL}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many requests. Please try again in {LOGIN_WINDOW_SECONDS} seconds."
+        )
+
+    # Add the current request timestamp
+    request_counts[client_ip].append(current_time)
+
 # --- API Endpoints ---
-@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new customer")
+@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new customer", dependencies=[Depends(rate_limit_login)])
 async def register_user(user_login: UserLogin):
     """Registers a new user with a unique username and password."""
     if user_login.username in users_db:
@@ -154,7 +183,7 @@ async def register_user(user_login: UserLogin):
     
     return {"message": "Registration successful"}
 
-@app.post("/login/", summary="Log in an existing user")
+@app.post("/login/", summary="Log in an existing user", dependencies=[Depends(rate_limit_login)])
 async def login(user: UserInDB = Depends(get_authenticated_user)):
     """Authenticates a user and confirms successful login."""
     print(f"{Fore.GREEN}INFO: User '{user.username}' logged in successfully.{Style.RESET_ALL}")
@@ -174,6 +203,11 @@ async def add_product(
     save_data()
     print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' added new product '{new_product.name}'.{Style.RESET_ALL}")
     return new_product
+
+@app.get("/products/", response_model=List[Product], summary="Get all products (Public)")
+async def get_products():
+    """Retrieves a list of all available products in the catalog."""
+    return list(products_db.values())
 
 @app.get(
     "/products/{product_id}",
@@ -242,18 +276,23 @@ async def delete_product(
     print(f"{Fore.RED}INFO: Admin '{admin_user.username}' deleted product with ID '{product_id}'.{Style.RESET_ALL}")
     return None
 
-@app.get("/products/", response_model=List[Product], summary="Get all products (Public)")
-async def get_products():
-    """Retrieves a list of all available products in the catalog."""
-    return list(products_db.values())
+# --- Cart Endpoints ---
+@app.get("/cart/", response_model=Cart, summary="Get the authenticated user's cart")
+async def get_cart(current_user: UserInDB = Depends(get_authenticated_user)):
+    """
+    Retrieves the shopping cart for the currently logged-in user.
+    """
+    # Returns the cart or an empty cart if the user has no items yet
+    return carts_db.get(current_user.username, Cart())
 
-@app.post("/cart/add/", summary="Add an item to the cart (Authenticated users only)")
+@app.post("/cart/add/", summary="Add or update an item in the cart (Authenticated users only)")
 async def add_to_cart(
     cart_item: CartItem, 
     current_user: UserInDB = Depends(get_authenticated_user)
 ):
     """
     Adds a specific quantity of a product to the authenticated user's cart.
+    If the product is already in the cart, its quantity is updated.
     """
     product = products_db.get(cart_item.product_id)
     if not product:
@@ -262,31 +301,33 @@ async def add_to_cart(
             detail="Product not found"
         )
 
-    if cart_item.quantity > product.stock:
+    # Get or create the user's cart
+    cart = carts_db.get(current_user.username, Cart())
+    
+    # Check if the product is already in the cart
+    found = False
+    for item in cart.items:
+        if item.product_id == cart_item.product_id:
+            item.quantity += cart_item.quantity
+            found = True
+            break
+            
+    if not found:
+        cart.items.append(cart_item)
+    
+    # Check for stock after updating quantity
+    updated_item = next((item for item in cart.items if item.product_id == cart_item.product_id), None)
+    if updated_item and updated_item.quantity > product.stock:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Requested quantity exceeds available stock"
         )
-
-    # Get or create the user's cart
-    cart = carts_db.get(current_user.username, Cart())
-    
-    cart.items.append(cart_item)
+            
     carts_db[current_user.username] = cart
     save_data()
-    print(f"{Fore.GREEN}INFO: User '{current_user.username}' added {cart_item.quantity} of product '{product.name}' to cart.{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' updated cart with product '{product.name}'.{Style.RESET_ALL}")
     
-    return {"message": f"Added {cart_item.quantity} of product {product.name} to cart."}
-
-@app.get("/cart/", response_model=Cart, summary="Get the authenticated user's cart (Authenticated users only)")
-async def get_cart(current_user: UserInDB = Depends(get_authenticated_user)):
-    """
-    Retrieves the shopping cart for the currently logged-in user.
-    """
-    # Returns the cart or an empty cart if the user has no items yet
-    return carts_db.get(current_user.username, Cart())
-
-# --- Advanced Cart Management Endpoints ---
+    return {"message": f"Cart updated. Added {cart_item.quantity} of product {product.name}."}
 
 @app.put("/cart/", summary="Update an item's quantity in the cart (Authenticated users only)")
 async def update_cart_item_quantity(
@@ -382,7 +423,6 @@ async def clear_cart(
     print(f"{Fore.GREEN}INFO: User '{current_user.username}' cleared their cart.{Style.RESET_ALL}")
 
     return {"message": "Cart cleared successfully."}
-
 
 @app.post("/cart/checkout/", summary="Process the shopping cart and finalize the purchase (Authenticated users only)")
 async def checkout(current_user: UserInDB = Depends(get_authenticated_user)):
