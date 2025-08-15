@@ -51,17 +51,17 @@ This is a FastAPI-based student portal API that allows students to register, log
 
 ## API Endpoints
 
-| Method | Endpoint                    | Description                                         | Authentication Required |
-| :----- | :-------------------------- | :-------------------------------------------------- | :---------------------- |
-| `POST` | `/register/`                | Register a new student user.                        | No                      |
-| `POST` | `/login/`                   | Authenticate a user and receive a success message.  | Yes (Basic Auth)        |
-| `GET`  | `/grades/`                  | Retrieve the authenticated student's grades.        | Yes (Basic Auth)        |
-| `PUT`  | `/grades/{username}`        | Update a student's grades.                          | Yes (Admin Role Only)   |
-| `GET`  | `/students/`                | Retrieve a list of all students.                    | No                      |
-| `GET`  | `/students/{name}`          | Retrieve a single student by name.                  | No                      |
-| `POST` | `/students/`                | Create a student entry with grades (public endpoint).| No                      |
-| `PUT`  | `/students/{name}`          | Update a student's data.                            | No                      |
-| `DELETE`| `/students/{name}`         | Delete a student entry.                             | No                      |
+| Method | Endpoint | Description | Authentication Required |
+| :----- | :------------------ | :---------------------------------------------------------------------- | :-------------------------------- |
+| `POST` | `/register/` | Register a new student user. | No |
+| `POST` | `/login/` | Authenticate a user and receive a success message. | Yes (Basic Auth) |
+| `GET` | `/grades/` | Retrieve the authenticated student's grades. | Yes (Student or Admin) |
+| `PUT` | `/grades/{username}` | Update a student's grades. | Yes (Admin Only) |
+| `GET` | `/students/` | Retrieve a list of all students. | Yes (Admin Only) |
+| `GET` | `/students/{name}` | Retrieve a single student's profile. | Yes (Admin or Self) |
+| `POST` | `/students/` | Create a student entry with grades. | Yes (Admin Only) |
+| `PUT` | `/students/{name}` | Update a student's data. | Yes (Admin Only) |
+| `DELETE`| `/students/{name}` | Delete a student entry. | Yes (Admin Only) |
 
 ---
 
