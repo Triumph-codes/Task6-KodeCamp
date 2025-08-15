@@ -70,6 +70,10 @@ class GradesSummary(BaseModel):
     overall_average: float
     subject_averages: Dict[str, SubjectSummary]
 
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=6)
+
 # --- Password Hashing and Security ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBasic()
@@ -254,6 +258,28 @@ async def get_grades(student: Student = Depends(get_authenticated_user)):
     Retrieves the grades and profile information for the currently logged-in student.
     """
     return student
+
+@app.put("/change-password/", summary="Change the authenticated student's password")
+async def change_password(
+    passwords: PasswordChange,
+    current_user: Student = Depends(get_authenticated_user)
+):
+    """
+    Allows a logged-in student to change their password by providing their old and new passwords.
+    """
+    # Verify the old password
+    if not verify_password(passwords.old_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect old password"
+        )
+    
+    # Hash and save the new password
+    current_user.hashed_password = hash_password(passwords.new_password)
+    save_students_data()
+    
+    print(f"{Fore.GREEN}INFO: Password for '{current_user.username}' changed successfully.{Style.RESET_ALL}")
+    return {"message": "Password changed successfully"}
 
 @app.put(
     "/grades/{username}",
