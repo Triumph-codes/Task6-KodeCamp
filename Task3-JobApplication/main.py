@@ -1,6 +1,6 @@
 # main.py
 
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
@@ -238,24 +238,50 @@ async def get_listings(
     print(f"{Fore.GREEN}INFO: User '{current_user.username}' viewed job listings.{Style.RESET_ALL}")
     return open_listings
 
-@app.get("/listings/{listing_id}/applicants/", summary="[Admin] View all applicants for a job listing")
+@app.get("/listings/{listing_id}/applicants/", summary="[Admin] View all applicants for a job listing with filtering and pagination")
 async def get_applicants(
     listing_id: str,
+    status_filter: Optional[str] = Query(None, description="Filter applicants by their status."),
+    sort_by: Optional[str] = Query("date_applied", description="Sort applicants by a field. 'date_applied' or 'username'"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
     current_user: UserInDB = Depends(is_admin)
 ):
-    """Retrieves all applicants for a specific job listing. Accessible only by admins."""
+    """
+    Retrieves all applicants for a specific job listing. Accessible only by admins.
+    Supports filtering by status, sorting, and pagination.
+    """
+    # 1. Filter applicants for the specific job listing
     applicants = [
         app for app in applications_db
         if app.listing_id == listing_id
     ]
+
+    # Handle case where no applicants are found for the listing
     if not applicants:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No applicants found for this listing."
-        )
+        return {"listing_id": listing_id, "applicants": []}
+
+    # 2. Apply status filter if provided
+    if status_filter:
+        applicants = [
+            app for app in applicants
+            if app.status.lower() == status_filter.lower()
+        ]
+
+    # 3. Sort the filtered applicants
+    if sort_by == "date_applied":
+        # Sort by date applied (newest first)
+        applicants.sort(key=lambda app: app.date_applied, reverse=True)
+    elif sort_by == "username":
+        # Sort by username alphabetically
+        applicants.sort(key=lambda app: app.username)
     
+    # 4. Apply pagination
+    paged_applicants = applicants[skip : skip + limit]
+
     print(f"{Fore.GREEN}INFO: Admin '{current_user.username}' viewed applicants for listing '{listing_id}'.{Style.RESET_ALL}")
-    return {"listing_id": listing_id, "applicants": applicants}
+    
+    return {"listing_id": listing_id, "applicants": paged_applicants}
 
 # --- Job Applications (User-specific) ---
 @app.post("/applications/", status_code=status.HTTP_201_CREATED, summary="[User] Add a new job application")
