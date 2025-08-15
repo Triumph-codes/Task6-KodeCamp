@@ -382,3 +382,57 @@ async def clear_cart(
     print(f"{Fore.GREEN}INFO: User '{current_user.username}' cleared their cart.{Style.RESET_ALL}")
 
     return {"message": "Cart cleared successfully."}
+
+
+@app.post("/cart/checkout/", summary="Process the shopping cart and finalize the purchase (Authenticated users only)")
+async def checkout(current_user: UserInDB = Depends(get_authenticated_user)):
+    """
+    Processes the authenticated user's shopping cart.
+    This endpoint verifies product availability, deducts items from stock,
+    and clears the cart upon successful checkout.
+    """
+    cart = carts_db.get(current_user.username, None)
+    
+    if not cart or not cart.items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your cart is empty."
+        )
+
+    # First Pass: Verify Stock for All Items
+    total_cost = 0.0
+    for item in cart.items:
+        product = products_db.get(item.product_id)
+        
+        # Check if the product still exists
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product with ID '{item.product_id}' not found. Cannot proceed with checkout."
+            )
+        
+        # Check if there is enough stock
+        if item.quantity > product.stock:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Not enough stock for product '{product.name}'. Available: {product.stock}, Requested: {item.quantity}."
+            )
+        
+        # Calculate cost
+        total_cost += product.price * item.quantity
+    
+    # Second Pass: Deduct Stock and Clear Cart
+    for item in cart.items:
+        product = products_db[item.product_id]
+        product.stock -= item.quantity
+    
+    # Clear the user's cart
+    del carts_db[current_user.username]
+    
+    save_data()
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' successfully completed checkout. Total cost: ${total_cost:.2f}.{Style.RESET_ALL}")
+    
+    return {
+        "message": "Checkout successful!", 
+        "total_cost": f"${total_cost:.2f}"
+    }
