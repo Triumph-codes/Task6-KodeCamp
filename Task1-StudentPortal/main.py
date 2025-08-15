@@ -62,6 +62,14 @@ class GradeUpdate(BaseModel):
                 raise ValueError(f"Score for {subject} must be between 0 and 100.")
         return self
 
+class SubjectSummary(BaseModel):
+    total_students: int
+    average_score: float
+
+class GradesSummary(BaseModel):
+    overall_average: float
+    subject_averages: Dict[str, SubjectSummary]
+
 # --- Password Hashing and Security ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBasic()
@@ -153,6 +161,39 @@ def create_initial_admin() -> None:
         save_students_data()
         print(f"{Fore.YELLOW}WARNING: Default admin user '{admin_username}' created with password '{admin_password}'.{Style.RESET_ALL}")
 
+def generate_grades_summary() -> GradesSummary:
+    """Generates a comprehensive summary of all student grades."""
+    if not students_db:
+        return GradesSummary(overall_average=0.0, subject_averages={})
+        
+    total_students_with_grades = 0
+    total_all_scores = 0.0
+    subject_scores_sum: Dict[str, float] = {}
+    subject_student_count: Dict[str, int] = {}
+
+    for student in students_db.values():
+        if student.subject_scores:
+            total_students_with_grades += 1
+            total_all_scores += student.average
+            for subject, score in student.subject_scores.items():
+                subject_scores_sum[subject] = subject_scores_sum.get(subject, 0.0) + score
+                subject_student_count[subject] = subject_student_count.get(subject, 0) + 1
+
+    overall_average = total_all_scores / total_students_with_grades if total_students_with_grades > 0 else 0.0
+
+    subject_averages = {
+        subject: SubjectSummary(
+            total_students=subject_student_count[subject],
+            average_score=subject_scores_sum[subject] / subject_student_count[subject]
+        )
+        for subject in subject_scores_sum
+    }
+
+    return GradesSummary(
+        overall_average=round(overall_average, 2),
+        subject_averages=subject_averages
+    )
+
 # --- FastAPI App ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -170,8 +211,11 @@ app = FastAPI(
 )
 
 # --- API Endpoints ---
-@app.post("/register/", status_code=status.HTTP_201_CREATED)
+@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new student")
 async def register_student(student_login: StudentLogin, db: Dict[str, Student] = Depends(get_students_db)):
+    """
+    Registers a new student user with a unique username and password.
+    """
     if student_login.username in db:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -198,18 +242,24 @@ async def register_student(student_login: StudentLogin, db: Dict[str, Student] =
 
 @app.post("/login/", summary="Log in a student")
 async def login(student: Student = Depends(get_authenticated_user)):
+    """
+    Authenticates a user and confirms successful login.
+    """
     print(f"{Fore.GREEN}INFO: Student '{student.username}' logged in successfully.{Style.RESET_ALL}")
     return {"message": "Login successful!"}
 
-@app.get("/grades/", response_model=StudentPublic)
+@app.get("/grades/", response_model=StudentPublic, summary="Get grades for the authenticated student")
 async def get_grades(student: Student = Depends(get_authenticated_user)):
+    """
+    Retrieves the grades and profile information for the currently logged-in student.
+    """
     return student
 
 @app.put(
     "/grades/{username}",
     response_model=StudentPublic,
     summary="Update grades for a student (Admin only)",
-    description="Allows an admin to add or modify grades for any student.",
+    description="Allows an admin to add or modify grades for any student. This is restricted to users with the 'admin' role."
 )
 async def update_grades(
     username: str,
@@ -235,7 +285,22 @@ async def update_grades(
     print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' updated grades for '{username}'.{Style.RESET_ALL}")
     return student
 
-@app.post("/students/", response_model=StudentPublic, status_code=201)
+@app.get(
+    "/reports/grades-summary",
+    response_model=GradesSummary,
+    summary="Get a summary of all student grades (Admin only)",
+    description="Retrieves statistical information, including overall average and per-subject averages for all students. Restricted to users with the 'admin' role."
+)
+async def get_grades_summary(admin_user: Student = Depends(get_current_admin)):
+    return generate_grades_summary()
+
+@app.post(
+    "/students/",
+    response_model=StudentPublic,
+    status_code=201,
+    summary="Create a new student entry (Admin only)",
+    description="Creates a new student entry with initial grades. This is an admin-only operation."
+)
 async def create_student(
     student_data: StudentBase,
     db: Dict[str, Student] = Depends(get_students_db),
@@ -263,7 +328,7 @@ async def create_student(
     "/students/{name}",
     response_model=StudentPublic,
     summary="Get a student's profile (Admin only or self)",
-    description="Allows an admin to get any student's profile, or a student to get their own."
+    description="Allows an admin to get any student's profile, or a student to get their own profile. Access to other student profiles is forbidden."
 )
 async def get_student(
     name: str,
@@ -284,7 +349,7 @@ async def get_student(
     "/students/",
     response_model=List[StudentPublic],
     summary="Get all student profiles (Admin only)",
-    description="Retrieves a list of all students and their profiles. Restricted to admins."
+    description="Retrieves a list of all students and their profiles. This endpoint is restricted to users with the 'admin' role."
 )
 async def get_all_students(
     db: Dict[str, Student] = Depends(get_students_db),
@@ -292,7 +357,12 @@ async def get_all_students(
 ):
     return list(db.values())
 
-@app.put("/students/{name}", response_model=StudentPublic)
+@app.put(
+    "/students/{name}",
+    response_model=StudentPublic,
+    summary="Update a student's profile (Admin only)",
+    description="Updates a student's profile data. This endpoint is restricted to users with the 'admin' role."
+)
 async def update_student(
     name: str,
     student_data: StudentBase,
@@ -315,7 +385,12 @@ async def update_student(
     save_students_data()
     return student
 
-@app.delete("/students/{name}", status_code=204)
+@app.delete(
+    "/students/{name}",
+    status_code=204,
+    summary="Delete a student entry (Admin only)",
+    description="Deletes a student and all their data from the system. This endpoint is restricted to users with the 'admin' role."
+)
 async def delete_student(
     name: str,
     db: Dict[str, Student] = Depends(get_students_db),
