@@ -149,7 +149,7 @@ app = FastAPI(
 )
 
 # --- Authentication Endpoints (unchanged) ---
-@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new customer")
+@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new User")
 async def register_user(user_login: UserLogin):
     """Registers a new user with a unique username and password."""
     if user_login.username in users_db:
