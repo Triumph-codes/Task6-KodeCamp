@@ -175,6 +175,75 @@ async def add_product(
     print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' added new product '{new_product.name}'.{Style.RESET_ALL}")
     return new_product
 
+# --- New Endpoints ---
+
+@app.get(
+    "/products/{product_id}",
+    response_model=Product,
+    summary="Get a single product by ID (Public)"
+)
+async def get_product(product_id: str):
+    """
+    Retrieves a single product from the catalog using its unique ID.
+    """
+    product = products_db.get(product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+    return product
+
+@app.put(
+    "/admin/products/{product_id}",
+    response_model=Product,
+    summary="Update an existing product (Admin only)"
+)
+async def update_product(
+    product_id: str,
+    product_data: ProductBase,
+    admin_user: UserInDB = Depends(get_current_admin)
+):
+    """
+    Updates the details of an existing product. Restricted to admins.
+    """
+    if product_id not in products_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+    
+    # Update the product data while keeping the original ID
+    updated_product = products_db[product_id].model_copy(update=product_data.model_dump())
+    
+    products_db[product_id] = updated_product
+    save_data()
+    print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' updated product '{updated_product.name}'.{Style.RESET_ALL}")
+    return updated_product
+
+@app.delete(
+    "/admin/products/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a product (Admin only)"
+)
+async def delete_product(
+    product_id: str,
+    admin_user: UserInDB = Depends(get_current_admin)
+):
+    """
+    Deletes a product from the catalog. Restricted to admins.
+    """
+    if product_id not in products_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+    
+    del products_db[product_id]
+    save_data()
+    print(f"{Fore.RED}INFO: Admin '{admin_user.username}' deleted product with ID '{product_id}'.{Style.RESET_ALL}")
+    return None
+
 @app.get("/products/", response_model=List[Product], summary="Get all products (Public)")
 async def get_products():
     """Retrieves a list of all available products in the catalog."""
