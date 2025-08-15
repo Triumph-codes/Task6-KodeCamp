@@ -37,6 +37,15 @@ class Student(StudentBase):
     average: float = Field(...)
     grade: str = Field(...)
 
+class StudentPublic(BaseModel):
+    """Public-facing student model for API responses (excludes sensitive data)."""
+    username: str
+    name: str
+    subject_scores: Dict[str, float] = {}
+    average: float = Field(...)
+    grade: str = Field(...)
+    role: str = "student"
+
 class StudentLogin(BaseModel):
     """Model for student registration/login"""
     username: str = Field(..., min_length=3)
@@ -63,9 +72,16 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
-def get_authenticated_user(credentials: HTTPBasicCredentials = Depends(security)) -> Student:
+def get_students_db() -> Dict[str, Student]:
+    """Dependency to load the database for each request."""
+    return students_db
+
+def get_authenticated_user(
+    credentials: HTTPBasicCredentials = Depends(security),
+    db: Dict[str, Student] = Depends(get_students_db)
+) -> Student:
     """Authenticates a user and returns the student object."""
-    student = students_db.get(credentials.username)
+    student = db.get(credentials.username)
     if not student or not verify_password(credentials.password, student.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -120,10 +136,8 @@ def calculate_average_and_grade(scores: Dict[str, float]) -> tuple[float, str]:
     return round(average, 2), "F"
 
 def create_initial_admin() -> None:
-    """Creates a default admin user if one does not exist."""
     admin_username = "admin"
-    admin_password = "admin_password" 
-
+    admin_password = "admin_password"  
     if admin_username not in students_db:
         hashed_password = hash_password(admin_password)
         admin_user = Student(
@@ -138,7 +152,6 @@ def create_initial_admin() -> None:
         students_db[admin_username] = admin_user
         save_students_data()
         print(f"{Fore.YELLOW}WARNING: Default admin user '{admin_username}' created with password '{admin_password}'.{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}WARNING: This password should be changed in a production environment.{Style.RESET_ALL}")
 
 # --- FastAPI App ---
 @asynccontextmanager
@@ -158,8 +171,8 @@ app = FastAPI(
 
 # --- API Endpoints ---
 @app.post("/register/", status_code=status.HTTP_201_CREATED)
-async def register_student(student_login: StudentLogin):
-    if student_login.username in students_db:
+async def register_student(student_login: StudentLogin, db: Dict[str, Student] = Depends(get_students_db)):
+    if student_login.username in db:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Username already registered"
@@ -167,18 +180,17 @@ async def register_student(student_login: StudentLogin):
     
     hashed_password = hash_password(student_login.password)
     
-    # New students are assigned a default role of "student"
     new_student = Student(
         username=student_login.username,
         hashed_password=hashed_password,
-        name=student_login.username, # Default name to username
+        name=student_login.username,
         role="student",
         subject_scores={},
         average=0.0,
         grade="N/A"
     )
     
-    students_db[student_login.username] = new_student
+    db[student_login.username] = new_student
     save_students_data()
     print(f"{Fore.GREEN}INFO: Student '{student_login.username}' registered successfully.{Style.RESET_ALL}")
     
@@ -189,18 +201,23 @@ async def login(student: Student = Depends(get_authenticated_user)):
     print(f"{Fore.GREEN}INFO: Student '{student.username}' logged in successfully.{Style.RESET_ALL}")
     return {"message": "Login successful!"}
 
+@app.get("/grades/", response_model=StudentPublic)
+async def get_grades(student: Student = Depends(get_authenticated_user)):
+    return student
+
 @app.put(
     "/grades/{username}",
-    response_model=Student,
+    response_model=StudentPublic,
     summary="Update grades for a student (Admin only)",
     description="Allows an admin to add or modify grades for any student.",
 )
 async def update_grades(
     username: str,
     grade_update: GradeUpdate,
+    db: Dict[str, Student] = Depends(get_students_db),
     admin_user: Student = Depends(get_current_admin)
 ):
-    student = students_db.get(username)
+    student = db.get(username)
     if not student:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -218,44 +235,94 @@ async def update_grades(
     print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' updated grades for '{username}'.{Style.RESET_ALL}")
     return student
 
-@app.get("/grades/", response_model=Student)
-async def get_grades(student: Student = Depends(get_authenticated_user)):
-    if not student:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+@app.post("/students/", response_model=StudentPublic, status_code=201)
+async def create_student(
+    student_data: StudentBase,
+    db: Dict[str, Student] = Depends(get_students_db),
+    admin_user: Student = Depends(get_current_admin)
+):
+    name_lower = student_data.name.lower()
+    if name_lower in db:
+        raise HTTPException(409, detail="Student already exists")
+    
+    avg, grade = calculate_average_and_grade(student_data.subject_scores)
+    student = Student(
+        username=name_lower,
+        hashed_password=hash_password("defaultpassword"),
+        name=student_data.name,
+        role="student",
+        subject_scores=student_data.subject_scores,
+        average=avg,
+        grade=grade
+    )
+    db[name_lower] = student
+    save_students_data()
     return student
 
-@app.get("/students/{name}", response_model=Student)
-async def get_student(name: str):
-    if (student := students_db.get(name.lower())) is None:
+@app.get(
+    "/students/{name}",
+    response_model=StudentPublic,
+    summary="Get a student's profile (Admin only or self)",
+    description="Allows an admin to get any student's profile, or a student to get their own."
+)
+async def get_student(
+    name: str,
+    db: Dict[str, Student] = Depends(get_students_db),
+    current_user: Student = Depends(get_authenticated_user)
+):
+    if current_user.role != "admin" and current_user.username != name:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this student's profile."
+        )
+
+    if (student := db.get(name.lower())) is None:
         raise HTTPException(404, detail="Student not found")
     return student
 
-@app.get("/students/", response_model=List[Student])
-async def get_all_students():
-    return list(students_db.values())
+@app.get(
+    "/students/",
+    response_model=List[StudentPublic],
+    summary="Get all student profiles (Admin only)",
+    description="Retrieves a list of all students and their profiles. Restricted to admins."
+)
+async def get_all_students(
+    db: Dict[str, Student] = Depends(get_students_db),
+    admin_user: Student = Depends(get_current_admin)
+):
+    return list(db.values())
 
-@app.put("/students/{name}", response_model=Student)
-async def update_student(name: str, student_data: StudentBase):
+@app.put("/students/{name}", response_model=StudentPublic)
+async def update_student(
+    name: str,
+    student_data: StudentBase,
+    db: Dict[str, Student] = Depends(get_students_db),
+    admin_user: Student = Depends(get_current_admin)
+):
     name_lower = name.lower()
-    if name_lower not in students_db:
+    if name_lower not in db:
         raise HTTPException(404, detail="Student not found")
     if student_data.name.lower() != name_lower:
         raise HTTPException(400, detail="Name mismatch")
     
     avg, grade = calculate_average_and_grade(student_data.subject_scores)
-    student = students_db[name_lower]
+    student = db[name_lower]
     student.subject_scores = student_data.subject_scores
     student.average = avg
     student.grade = grade
     
-    students_db[name_lower] = student
+    db[name_lower] = student
     save_students_data()
     return student
 
 @app.delete("/students/{name}", status_code=204)
-async def delete_student(name: str):
-    if (name_lower := name.lower()) not in students_db:
+async def delete_student(
+    name: str,
+    db: Dict[str, Student] = Depends(get_students_db),
+    admin_user: Student = Depends(get_current_admin)
+):
+    if (name_lower := name.lower()) not in db:
         raise HTTPException(404, detail="Student not found")
-    del students_db[name_lower]
+    del db[name_lower]
     save_students_data()
     return None
