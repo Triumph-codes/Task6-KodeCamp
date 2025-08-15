@@ -1,6 +1,8 @@
 # Virtual Environment
 venv/
 *env
+*.secret
+
 # Python
 __pycache__/
 *.pyc
