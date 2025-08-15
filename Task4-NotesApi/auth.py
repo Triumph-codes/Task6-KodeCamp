@@ -7,14 +7,14 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from typing import Dict, Optional
+from decouple import config
 import json
 import os
 
 # --- Constants ---
-# You would typically store these in environment variables
-SECRET_KEY = "your-super-secret-key"  # IMPORTANT: Change this in production
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+SECRET_KEY = config("SECRET_KEY")
+ALGORITHM = config("ALGORITHM")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(config("ACCESS_TOKEN_EXPIRE_MINUTES"))
 USERS_FILE = "users.json"
 
 # --- Models ---
