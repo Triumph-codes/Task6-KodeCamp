@@ -34,6 +34,13 @@ class JobListing(BaseModel):
     description: str
     status: str = "open"  # Can be "open" or "closed"
 
+# This model is what the user sends in the request body
+class UserJobApplication(BaseModel):
+    """Model for a user's job application request."""
+    listing_id: str
+    date_applied: str
+
+# This is the full model stored in the database
 class JobApplication(BaseModel):
     """Model for a user's job application."""
     application_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -44,11 +51,9 @@ class JobApplication(BaseModel):
     status: str = "Applied"
     username: str
 
-# --- Mock-up Databases ---
-# We now store applications as a flat list
-applications_db: List[JobApplication] = []
 
-# Listings are stored by their unique ID
+# --- Mock-up Databases ---
+applications_db: List[JobApplication] = []
 listings_db: Dict[str, JobListing] = {}
 
 # --- Utility Functions for Data Persistence ---
@@ -144,7 +149,7 @@ app = FastAPI(
 )
 
 # --- Authentication Endpoints (unchanged) ---
-@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new User")
+@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new customer")
 async def register_user(user_login: UserLogin):
     """Registers a new user with a unique username and password."""
     if user_login.username in users_db:
@@ -286,32 +291,41 @@ async def get_applicants(
 # --- Job Applications (User-specific) ---
 @app.post("/applications/", status_code=status.HTTP_201_CREATED, summary="[User] Add a new job application")
 async def add_application(
-    application: JobApplication,
+    user_application: UserJobApplication,
     current_user: UserInDB = Depends(get_authenticated_user)
 ):
     """
     Adds a new job application for the current user, associated with a job listing.
+    The job title and company are automatically retrieved from the job listing.
     """
-    if application.listing_id not in listings_db:
+    # Check if the job listing exists
+    job_listing = listings_db.get(user_application.listing_id)
+    if not job_listing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job listing not found."
         )
 
     # Ensure the user is not trying to apply for a closed job
-    if listings_db[application.listing_id].status == "closed":
+    if job_listing.status == "closed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This job listing is no longer accepting applications."
         )
 
-    # Automatically set the username based on the authenticated user
-    application.username = current_user.username
+    # Create the full JobApplication object by filling in the details from the listing
+    full_application = JobApplication(
+        listing_id=job_listing.listing_id,
+        job_title=job_listing.job_title,
+        company=job_listing.company,
+        date_applied=user_application.date_applied,
+        username=current_user.username
+    )
     
-    applications_db.append(application)
+    applications_db.append(full_application)
     
     save_data()
-    print(f"{Fore.GREEN}INFO: User '{current_user.username}' added a new application for listing '{application.listing_id}'.{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' added a new application for listing '{full_application.listing_id}'.{Style.RESET_ALL}")
     
     return {"message": "Application added successfully."}
 
