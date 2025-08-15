@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import uuid
+from colorama import init, Fore, Style
 
 # Import authentication functions and models from auth.py
 from auth import (
@@ -43,6 +44,12 @@ class NoteCreate(BaseModel):
     title: str
     content: str
 
+class NoteUpdate(BaseModel):
+    """Pydantic model for updating a note (all fields are optional)."""
+    title: str | None = None
+    content: str | None = None
+
+
 # In-memory database for notes, structured by username
 notes_db: Dict[str, List[Note]] = {}
 
@@ -58,7 +65,7 @@ def load_notes() -> None:
                 for username, notes in data.items():
                     notes_db[username] = [Note(**note) for note in notes]
         except Exception as e:
-            print(f"Error loading notes data: {e}")
+            print(f"{Fore.RED}Error loading notes data: {e}{Style.RESET_ALL}")
 
 def save_notes() -> None:
     """Saves notes data to a JSON file."""
@@ -69,8 +76,9 @@ def save_notes() -> None:
                 for username, notes in notes_db.items()
             }
             json.dump(serializable_notes, f, indent=4)
+        print(f"{Fore.GREEN}INFO: Notes data saved successfully.{Style.RESET_ALL}")
     except Exception as e:
-            print(f"Error saving notes data: {e}")
+        print(f"{Fore.RED}Error saving notes data: {e}{Style.RESET_ALL}")
 
 # --- FastAPI App Lifecycle ---
 @asynccontextmanager
@@ -79,12 +87,13 @@ async def lifespan(app: FastAPI):
     Function to run on app startup and shutdown.
     Loads data and creates a default user on startup.
     """
-    print("Starting up...")
+    init() # Initialize colorama
+    print(f"{Fore.CYAN}Starting up...{Style.RESET_ALL}")
     load_users()
     create_initial_user()
     load_notes()
     yield
-    print("Shutting down...")
+    print(f"{Fore.CYAN}Shutting down...{Style.RESET_ALL}")
     save_notes()
     save_users()
 
@@ -153,3 +162,68 @@ async def get_notes(
     """
     # Return the user's notes, or an empty list if they have none
     return notes_db.get(current_user.username, [])
+
+
+@app.get("/notes/{note_id}", response_model=Note, summary="View a single note by ID")
+async def get_single_note(
+    note_id: str,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    """
+    Retrieves a single note for the authenticated user by its ID.
+    Raises 404 if the note is not found or does not belong to the user.
+    """
+    user_notes = notes_db.get(current_user.username, [])
+    for note in user_notes:
+        if note.note_id == note_id:
+            return note
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Note not found."
+    )
+
+@app.put("/notes/{note_id}", response_model=Note, summary="Update an existing note")
+async def update_note(
+    note_id: str,
+    note_update: NoteUpdate,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    """
+    Updates an existing note for the authenticated user.
+    Raises 404 if the note is not found or does not belong to the user.
+    """
+    user_notes = notes_db.get(current_user.username, [])
+    for i, note in enumerate(user_notes):
+        if note.note_id == note_id:
+            if note_update.title:
+                note.title = note_update.title
+            if note_update.content:
+                note.content = note_update.content
+            notes_db[current_user.username][i] = note
+            save_notes()
+            return note
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Note not found."
+    )
+
+@app.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a note by ID")
+async def delete_note(
+    note_id: str,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    """
+    Deletes a single note for the authenticated user by its ID.
+    Raises 404 if the note is not found or does not belong to the user.
+    """
+    user_notes = notes_db.get(current_user.username, [])
+    # Find the note index and remove it
+    for i, note in enumerate(user_notes):
+        if note.note_id == note_id:
+            del notes_db[current_user.username][i]
+            save_notes()
+            return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Note not found."
+    )

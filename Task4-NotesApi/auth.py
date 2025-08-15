@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from decouple import config
 import json
 import os
+from colorama import init, Fore, Style
 
 # --- Constants ---
 SECRET_KEY = config("SECRET_KEY")
@@ -26,8 +27,6 @@ class UserInDB(BaseModel):
 class User(BaseModel):
     """User model for public-facing data (e.g., login request)."""
     username: str
-    # The password is only needed for registration, not for a public User model
-    # I've updated this to only have the username and the password will be handled separately
     
 class UserRegister(BaseModel):
     """Model for user registration, including a password."""
@@ -55,7 +54,7 @@ def load_users() -> None:
                 data = json.load(f)
                 users_db.update({key: UserInDB(**user) for key, user in data.items()})
         except Exception as e:
-            print(f"Error loading users data: {e}")
+            print(f"{Fore.RED}Error loading users data: {e}{Style.RESET_ALL}")
 
 def save_users() -> None:
     """Saves user data to a JSON file."""
@@ -63,8 +62,9 @@ def save_users() -> None:
         with open(USERS_FILE, "w") as f:
             serializable_users = {key: user.model_dump() for key, user in users_db.items()}
             json.dump(serializable_users, f, indent=4)
+        print(f"{Fore.GREEN}INFO: Users data saved successfully.{Style.RESET_ALL}")
     except Exception as e:
-        print(f"Error saving users data: {e}")
+        print(f"{Fore.RED}Error saving users data: {e}{Style.RESET_ALL}")
 
 def create_initial_user() -> None:
     """Creates a default user for testing if none exist."""
@@ -75,7 +75,7 @@ def create_initial_user() -> None:
         new_user = UserInDB(username=default_username, hashed_password=hashed_password)
         users_db[default_username] = new_user
         save_users()
-        print(f"INFO: Default user '{default_username}' created with password '{default_password}'.")
+        print(f"{Fore.YELLOW}INFO: Default user '{default_username}' created with password '{default_password}'.{Style.RESET_ALL}")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Checks a plain password against a hashed one."""
