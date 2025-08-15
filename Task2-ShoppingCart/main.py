@@ -175,8 +175,6 @@ async def add_product(
     print(f"{Fore.GREEN}INFO: Admin '{admin_user.username}' added new product '{new_product.name}'.{Style.RESET_ALL}")
     return new_product
 
-# --- New Endpoints ---
-
 @app.get(
     "/products/{product_id}",
     response_model=Product,
@@ -273,10 +271,114 @@ async def add_to_cart(
     # Get or create the user's cart
     cart = carts_db.get(current_user.username, Cart())
     
-    # Update cart logic (simple version for now)
     cart.items.append(cart_item)
     carts_db[current_user.username] = cart
     save_data()
     print(f"{Fore.GREEN}INFO: User '{current_user.username}' added {cart_item.quantity} of product '{product.name}' to cart.{Style.RESET_ALL}")
     
     return {"message": f"Added {cart_item.quantity} of product {product.name} to cart."}
+
+@app.get("/cart/", response_model=Cart, summary="Get the authenticated user's cart (Authenticated users only)")
+async def get_cart(current_user: UserInDB = Depends(get_authenticated_user)):
+    """
+    Retrieves the shopping cart for the currently logged-in user.
+    """
+    # Returns the cart or an empty cart if the user has no items yet
+    return carts_db.get(current_user.username, Cart())
+
+# --- Advanced Cart Management Endpoints ---
+
+@app.put("/cart/", summary="Update an item's quantity in the cart (Authenticated users only)")
+async def update_cart_item_quantity(
+    cart_item: CartItem,
+    current_user: UserInDB = Depends(get_authenticated_user)
+):
+    """
+    Updates the quantity of a specific item in the authenticated user's cart.
+    The new quantity must be greater than 0 and not exceed product stock.
+    """
+    product = products_db.get(cart_item.product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    if cart_item.quantity > product.stock:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Requested quantity exceeds available stock"
+        )
+        
+    cart = carts_db.get(current_user.username, Cart())
+    
+    # Find and update the item in the cart
+    item_updated = False
+    for item in cart.items:
+        if item.product_id == cart_item.product_id:
+            item.quantity = cart_item.quantity
+            item_updated = True
+            break
+
+    if not item_updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found in cart"
+        )
+
+    carts_db[current_user.username] = cart
+    save_data()
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' updated quantity for product '{product.name}' to {cart_item.quantity}.{Style.RESET_ALL}")
+    
+    return {"message": f"Updated quantity for product {product.name} to {cart_item.quantity}."}
+
+@app.delete("/cart/{product_id}", summary="Remove a single item from the cart (Authenticated users only)")
+async def remove_from_cart(
+    product_id: str,
+    current_user: UserInDB = Depends(get_authenticated_user)
+):
+    """
+    Removes a single item from the authenticated user's cart by product ID.
+    """
+    cart = carts_db.get(current_user.username, None)
+    if not cart:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart is empty or not found"
+        )
+    
+    # Use list comprehension to create a new list without the item to be removed
+    updated_items = [item for item in cart.items if item.product_id != product_id]
+    
+    # Check if the product was actually removed
+    if len(updated_items) == len(cart.items):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found in cart"
+        )
+
+    cart.items = updated_items
+    carts_db[current_user.username] = cart
+    save_data()
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' removed product '{product_id}' from cart.{Style.RESET_ALL}")
+
+    return {"message": f"Product {product_id} removed from cart."}
+
+@app.delete("/cart/", summary="Clear the entire cart (Authenticated users only)")
+async def clear_cart(
+    current_user: UserInDB = Depends(get_authenticated_user)
+):
+    """
+    Deletes all items from the authenticated user's shopping cart.
+    """
+    if current_user.username not in carts_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Cart is already empty or not found"
+        )
+    
+    del carts_db[current_user.username]
+    save_data()
+    print(f"{Fore.GREEN}INFO: User '{current_user.username}' cleared their cart.{Style.RESET_ALL}")
+
+    return {"message": "Cart cleared successfully."}
