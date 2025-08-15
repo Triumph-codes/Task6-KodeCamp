@@ -24,6 +24,7 @@ init(autoreset=True)
 # --- Constants ---
 APPLICATIONS_FILE = "applications.json"
 LISTINGS_FILE = "job_listings.json"
+USERS_FILE = "users.json"
 
 # --- Pydantic Models ---
 class JobListing(BaseModel):
@@ -51,15 +52,24 @@ class JobApplication(BaseModel):
     status: str = "Applied"
     username: str
 
-
 # --- Mock-up Databases ---
 applications_db: List[JobApplication] = []
 listings_db: Dict[str, JobListing] = {}
 
 # --- Utility Functions for Data Persistence ---
 def load_data() -> None:
-    """Loads application and listing data from JSON files."""
-    global applications_db, listings_db
+    """Loads all data from JSON files."""
+    global applications_db, listings_db, users_db
+
+    # Load users
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                data = json.load(f)
+                users_db.update({key: UserInDB(**user) for key, user in data.items()})
+            print(f"{Fore.GREEN}INFO: Loaded user data.{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.RED}ERROR loading user data: {e}{Style.RESET_ALL}")
 
     # Load applications
     if os.path.exists(APPLICATIONS_FILE):
@@ -85,9 +95,9 @@ def load_data() -> None:
         except Exception as e:
             print(f"{Fore.RED}ERROR loading listings data: {e}{Style.RESET_ALL}")
             listings_db = {}
-    
+
 def save_data() -> None:
-    """Saves application and listing data to JSON files."""
+    """Saves all data to JSON files."""
     try:
         # Save applications
         with open(APPLICATIONS_FILE, "w") as f:
@@ -104,6 +114,15 @@ def save_data() -> None:
             json.dump(serializable_listings, f, indent=4)
         print(f"{Fore.GREEN}INFO: Saved job listings.{Style.RESET_ALL}")
 
+        # Save users
+        with open(USERS_FILE, "w") as f:
+            serializable_users = {
+                key: user.model_dump()
+                for key, user in users_db.items()
+            }
+            json.dump(serializable_users, f, indent=4)
+        print(f"{Fore.GREEN}INFO: Saved user data.{Style.RESET_ALL}")
+
     except Exception as e:
         print(f"{Fore.RED}ERROR saving data: {e}{Style.RESET_ALL}")
 
@@ -119,6 +138,7 @@ def create_initial_admin() -> None:
             role="admin"
         )
         users_db[admin_username] = admin_user
+        save_data() # Save the new user to disk
         print(f"{Fore.YELLOW}WARNING: Default admin user '{admin_username}' created with password '{admin_password}'.{Style.RESET_ALL}")
 
 # --- Custom Dependencies ---
@@ -149,7 +169,7 @@ app = FastAPI(
 )
 
 # --- Authentication Endpoints (unchanged) ---
-@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new User")
+@app.post("/register/", status_code=status.HTTP_201_CREATED, summary="Register a new customer")
 async def register_user(user_login: UserLogin):
     """Registers a new user with a unique username and password."""
     if user_login.username in users_db:
@@ -167,6 +187,7 @@ async def register_user(user_login: UserLogin):
     )
     
     users_db[user_login.username] = new_user
+    save_data() # Save the new user to disk
     print(f"{Fore.GREEN}INFO: User '{user_login.username}' registered successfully.{Style.RESET_ALL}")
     
     return {"message": "Registration successful"}
